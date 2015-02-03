@@ -1,7 +1,7 @@
 # threadpool
 A fork / join framework threadpool that implements work-stealing and work helping.
 
-    My thread pool structure contains a global queue of futures, a queue of worker threads,
+My thread pool structure contains a global queue of futures, a queue of worker threads,
 a condition variable to signal when a task is ready to be executed, and one lock to control all 
 the data in the pool. It also includes a shutdown flag and a barrier that syncs all the threads
 at the start of execution. This is to ensure the threads gain the lock first and are doing most 
@@ -9,14 +9,14 @@ of the work rather then the main routine calling future_get. Each worker has the
 futures along with thread id. Each future stores the task and its data, a conditional variable 
 to flag when it is done executing, its status, and reference to the pool it is contained in. 
 
-    I avoid deadlocks by making every function call for the lock and release it after its use.
+I avoid deadlocks by making every function call for the lock and release it after its use.
 I use no semaphores and only one mutex. This keeps it simple although it seems inefficient. 
 It is necessary because every function reads and writes from the queues in every call. I'm sure 
 there are some parts in my code where the lock isn't necessary, but I take the precaution to reduce
 bugs. This also ensures that there are no race conditions. There does not seem to cause any 
 reduction in speed up as my results compare well to the benchmark and the rest of the class. 
 
-    A worker thread's flow goes like this: It first encounters a while loop that determine
+A worker thread's flow goes like this: It first encounters a while loop that determine
 if it should be sleeping or not. A worker thread should be sleeping if the global queue is empty,
 its worker queue is empty, and all other worker queue's are empty. This is determined in the
 static function sleeping(). If it should be sleeping it does so and awakens when the work_flag
@@ -30,7 +30,7 @@ it reacquires the lock, marks the future as completed, and signals the future's 
 let whatever is relying on this future know that it is done executing. The worker thread then 
 repeats this process until the shutdown boolean is flagged.
                    
-    The only error valgrind is giving is when I run with the race checker, however I believe
+The only error valgrind is giving is when I run with the race checker, however I believe
 it is a false positive. It is telling me that I am trying to destroy an unknown condition variable 
 in future_get. However this condition variable is always initialized in future submit and cond_destroy 
 is never called other than in future_free. 
