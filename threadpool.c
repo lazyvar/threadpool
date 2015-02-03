@@ -6,18 +6,21 @@
 #include <pthread.h>
 #include <stdbool.h>
 
+/* status of job */
 typedef enum {
     NOT_STARTED = 0,
     IN_PROGRESS = 1,
     COMPLETED = 2
 } status_t;
 
+/* worker info */
 struct worker {
     pthread_t tid;
     struct list worker_queue;
     struct list_elem elem;
 };
 
+/* pool info */
 struct thread_pool {
     struct list worker_threads;
     struct list global_queue;
@@ -28,6 +31,7 @@ struct thread_pool {
     int nthreads;
 };
 
+/* future info */
 struct future {
     void * data;
     void * result;
@@ -40,6 +44,9 @@ struct future {
 
 //#define DEBUG
 
+/* save worker info local so the thread knows itself
+ * can still access other worker threads info through 
+ * pool queue */
 static __thread struct worker * w;
 static __thread bool is_worker;
 
@@ -47,9 +54,12 @@ static struct list_elem * steal_task(struct thread_pool * p);
 static bool sleeping(struct thread_pool *);
 static void * working_thread(void *);
 
+/* raise shutdown flag and free variable */
 void thread_pool_shutdown_and_destroy(struct thread_pool * t) {
     pthread_mutex_lock(&t->lock);
     t->shutdown = true;
+    
+    /* wake all threads so they can shutdown */
     pthread_cond_broadcast(&t->work_flag);
     pthread_mutex_unlock(&t->lock);
 
@@ -57,6 +67,8 @@ void thread_pool_shutdown_and_destroy(struct thread_pool * t) {
         printf("Shutdown signaled, joining threads.\n");
     #endif
 
+
+    /* threads join here */
     struct list_elem * we;
     struct worker * w;
     for (we = list_begin(&t->worker_threads); we != list_end(&t->worker_threads); we = list_next(we)) {
@@ -66,18 +78,21 @@ void thread_pool_shutdown_and_destroy(struct thread_pool * t) {
         }
     }
 
+    /* free worker structs */
     while (!list_empty(&t->worker_threads)) {
         we = list_pop_front(&t->worker_threads);
         w = list_entry(we, struct worker, elem);
         free(w);
     }
 
+    /* free condition vars and self */
     pthread_mutex_destroy(&t->lock);
     pthread_cond_destroy(&t->work_flag);
     pthread_barrier_destroy(&t->start_sync);
     free(t);
 }
 
+/* thread pool creation */
 struct thread_pool * thread_pool_new(int nthreads) {
     
     struct thread_pool * pool;
@@ -108,6 +123,7 @@ struct thread_pool * thread_pool_new(int nthreads) {
     pool->shutdown = false;   
     pool->nthreads = nthreads;
 
+    /* initialize and create worker threads */
     int i;
     for (i = 0;i < nthreads; i++) {
         struct worker * wt;
@@ -144,6 +160,7 @@ struct thread_pool * thread_pool_new(int nthreads) {
     return pool;
 }
 
+/* submit a job to be completed. could be externally or internally requested */
 struct future * thread_pool_submit( struct thread_pool *pool,  fork_join_task_t task, void * data) {
     
     pthread_mutex_lock(&pool->lock);
@@ -165,6 +182,7 @@ struct future * thread_pool_submit( struct thread_pool *pool,  fork_join_task_t 
     f->status = NOT_STARTED;
     f->pool = pool;
 
+    /* check for internal / external submission */
     if (is_worker) {
         #ifdef DEBUG
             printf("Received internal thread_pool_submit, pushing onto worker's stack\n");
@@ -187,16 +205,20 @@ struct future * thread_pool_submit( struct thread_pool *pool,  fork_join_task_t 
     return f;
 }
 
+/* worker thread function */
 static void * working_thread(void * param) {
     struct thread_pool * pool = (struct thread_pool *) param;
-   
+  
+    /* wait for all worker threads to be created before workers start working */
     pthread_barrier_wait(&pool->start_sync);
 
     bool first = true;
+    /* run loop */
     while (1) {
     
         pthread_mutex_lock(&pool->lock);
-        
+       
+        /* if in creation, set local worker info */
         if (first) {
             pthread_t tid = pthread_self();
             struct list_elem * we;
@@ -213,6 +235,7 @@ static void * working_thread(void * param) {
             first = false;
         }
 
+        /* surrounded in loop to prevent spurious wake ups */
         while(sleeping(pool)) {
             #ifdef DEBUG
                 printf("No work, now sleeping.\n");
@@ -223,7 +246,8 @@ static void * working_thread(void * param) {
         #ifdef DEBUG
             printf("Awoken worker thread: %d.\n", (int) w->tid);
         #endif
-        
+       
+        /* if shutdown break out of run loop */
         if (pool->shutdown) {
             break;
         }
@@ -231,7 +255,10 @@ static void * working_thread(void * param) {
         #ifdef DEBUG
             printf("Doing work.\n");
         #endif
-        
+       
+        /* first check worker's own queue, then check global queue,
+         * and finally steal from other workers if the first two
+         * are empty. */
         struct list_elem * e;
         if (list_empty(&w->worker_queue)) {
             if (list_empty(&pool->global_queue)) {
@@ -242,21 +269,27 @@ static void * working_thread(void * param) {
         } else {
             e = list_pop_front(&w->worker_queue);
         }
-    
+   
+        /* this should never return error as the mutex is still held,
+         * and therefore no changes should be made in any queue */
         if (e == NULL) {
             printf("Error finding task.\n");
             pool->shutdown = true;
             break;
         }
-      
+     
+        /* get future and run it */
         struct future * f = list_entry(e, struct future, elem);
         
         f->status = IN_PROGRESS;
 
+        /* cant forget to release the lock! */
         pthread_mutex_unlock(&pool->lock);
 
         f->result = (f->task)(pool, f->data);
-        
+       
+        /* task is done, reacquire lock and notify any thread waiting
+         * on future */
         pthread_mutex_lock(&pool->lock);
         
         f->status = COMPLETED;
@@ -264,6 +297,8 @@ static void * working_thread(void * param) {
 
         pthread_mutex_unlock(&pool->lock);   
     }
+
+    /* pool is shutting down */
     pthread_mutex_unlock(&pool->lock);
     
     #ifdef DEBUG
@@ -274,6 +309,7 @@ static void * working_thread(void * param) {
     return NULL;
 }
 
+/* returns a future once it has finished executing */
 void * future_get(struct future * f) { 
    
     #ifdef DEBUG
@@ -281,7 +317,8 @@ void * future_get(struct future * f) {
     #endif
 
     pthread_mutex_lock(&f->pool->lock);
-    
+   
+    /* if not started, thread helps in execution */
     if (f->status == NOT_STARTED) {
         #ifdef DEBUG
             printf("Task not yet started, starting now.\n");
@@ -322,6 +359,7 @@ void future_free(struct future * f) {
     free(f);
 }
 
+/* goes through and checks all the queues, if all are empty then the thread should sleep */
 static bool sleeping(struct thread_pool * p) {
     struct list_elem * wte;
     for (wte = list_begin(&p->worker_threads); wte != list_end(&p->worker_threads); wte = list_next(wte)) {
@@ -335,6 +373,7 @@ static bool sleeping(struct thread_pool * p) {
     return list_empty(&p->global_queue) && list_empty(&w->worker_queue) && !p->shutdown;
 }
 
+/* goes through all worker threads and finds the first job available to steal */
 static struct list_elem * steal_task(struct thread_pool * p) {
     
     struct list_elem * wte;
