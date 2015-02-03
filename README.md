@@ -1,5 +1,6 @@
 # threadpool
 A fork / join framework threadpool that implements work-stealing and work helping.
+View threadpool.c for my code. All other code and tests were written by the instructor. 
 
 My thread pool structure contains a global queue of futures, a queue of worker threads,
 a condition variable to signal when a task is ready to be executed, and one lock to control all 
