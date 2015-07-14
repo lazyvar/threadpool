@@ -1,4 +1,4 @@
-/* import statements */
+/* includes */
 
 #include "threadpool.h"
 #include "list.h"
