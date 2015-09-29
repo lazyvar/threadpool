@@ -10,13 +10,6 @@ of the work rather then the main routine calling future_get. Each worker has the
 futures along with thread id. Each future stores the task and its data, a conditional variable 
 to flag when it is done executing, its status, and reference to the pool it is contained in. 
 
-I avoid deadlocks by making every function call for the lock and release it after its use.
-I use no semaphores and only one mutex. This keeps it simple although it seems inefficient. 
-It is necessary because every function reads and writes from the queues in every call. I'm sure 
-there are some parts in my code where the lock isn't necessary, but I take the precaution to reduce
-bugs. This also ensures that there are no race conditions. There does not seem to cause any 
-reduction in speed up as my results compare well to the benchmark and the rest of the class. 
-
 A worker thread's flow goes like this: It first encounters a while loop that determine
 if it should be sleeping or not. A worker thread should be sleeping if the global queue is empty,
 its worker queue is empty, and all other worker queue's are empty. This is determined in the
